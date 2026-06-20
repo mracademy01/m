@@ -1,0 +1,231 @@
+// نظام توزيع المذكرات — Prisma schema
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// المستخدمون والصلاحيات
+// role: ADMIN | WAREHOUSE | TEAM | CENTER | CASHIER
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  username     String   @unique
+  passwordHash String
+  role         String
+  active       Boolean  @default(true)
+  teamId       Int?
+  team         Team?    @relation(fields: [teamId], references: [id])
+  centerId     Int?
+  center       Center?  @relation(fields: [centerId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// المطبعة / المورد
+model Supplier {
+  id        Int            @id @default(autoincrement())
+  name      String
+  phone     String?
+  notes     String?
+  active    Boolean        @default(true)
+  receipts  PrintReceipt[]
+  createdAt DateTime       @default(now())
+}
+
+// المذكرة / المنتج
+model Product {
+  id        Int     @id @default(autoincrement())
+  name      String
+  subject   String?
+  grade     String?
+  costPrice Float   @default(0)
+  sellPrice Float   @default(0)
+  stock     Int     @default(0) // رصيد المخزن المركزي
+  active    Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  printReceiptItems   PrintReceiptItem[]
+  teamTransferItems   TeamTransferItem[]
+  centerDeliveryItems CenterDeliveryItem[]
+  centerReturnItems   CenterReturnItem[]
+  shopSaleItems       ShopSaleItem[]
+  teamStocks          TeamStock[]
+}
+
+// التيم (ناقل عُهدة — بدون حسابات مالية)
+model Team {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String?
+  notes     String?
+  active    Boolean  @default(true)
+  users     User[]
+  stocks    TeamStock[]
+  transfers TeamTransfer[]
+  deliveries CenterDelivery[]
+  returns   CenterReturn[]
+  createdAt DateTime @default(now())
+}
+
+// رصيد عُهدة التيم لكل منتج
+model TeamStock {
+  id        Int     @id @default(autoincrement())
+  teamId    Int
+  team      Team    @relation(fields: [teamId], references: [id])
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+  qty       Int     @default(0)
+
+  @@unique([teamId, productId])
+}
+
+// السنتر / المكتب (يأخذ بالأجل وعليه مديونية)
+model Center {
+  id          Int      @id @default(autoincrement())
+  name        String
+  ownerName   String?
+  phone       String?
+  governorate String?
+  address     String?
+  active      Boolean  @default(true)
+  users       User[]
+  deliveries  CenterDelivery[]
+  returns     CenterReturn[]
+  payments    Payment[]
+  createdAt   DateTime @default(now())
+}
+
+// استلام من المطبعة (إدخال للمخزن المركزي)
+model PrintReceipt {
+  id          Int                @id @default(autoincrement())
+  supplierId  Int?
+  supplier    Supplier?          @relation(fields: [supplierId], references: [id])
+  date        DateTime           @default(now())
+  notes       String?
+  createdById Int?
+  items       PrintReceiptItem[]
+  createdAt   DateTime           @default(now())
+}
+
+model PrintReceiptItem {
+  id        Int          @id @default(autoincrement())
+  receiptId Int
+  receipt   PrintReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product      @relation(fields: [productId], references: [id])
+  qty       Int
+  unitCost  Float        @default(0)
+}
+
+// تحويل عُهدة بين المخزن والتيم
+// type: ISSUE (مخزن -> تيم) | RETURN (تيم -> مخزن)
+model TeamTransfer {
+  id          Int                @id @default(autoincrement())
+  teamId      Int
+  team        Team               @relation(fields: [teamId], references: [id])
+  type        String
+  date        DateTime           @default(now())
+  notes       String?
+  createdById Int?
+  items       TeamTransferItem[]
+  createdAt   DateTime           @default(now())
+}
+
+model TeamTransferItem {
+  id         Int          @id @default(autoincrement())
+  transferId Int
+  transfer   TeamTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId  Int
+  product    Product      @relation(fields: [productId], references: [id])
+  qty        Int
+}
+
+// تسليم للسنتر بالأجل (يزيد مديونية السنتر بسعر البيع)
+model CenterDelivery {
+  id          Int                  @id @default(autoincrement())
+  centerId    Int
+  center      Center               @relation(fields: [centerId], references: [id])
+  teamId      Int? // مصدر الكمية: عُهدة تيم أو null = من المخزن المركزي
+  team        Team?                @relation(fields: [teamId], references: [id])
+  date        DateTime             @default(now())
+  notes       String?
+  createdById Int?
+  items       CenterDeliveryItem[]
+  createdAt   DateTime             @default(now())
+}
+
+model CenterDeliveryItem {
+  id         Int            @id @default(autoincrement())
+  deliveryId Int
+  delivery   CenterDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  productId  Int
+  product    Product        @relation(fields: [productId], references: [id])
+  qty        Int
+  unitPrice  Float          @default(0)
+}
+
+// مرتجع من السنتر (يقلل المديونية ويرجّع المخزون)
+model CenterReturn {
+  id          Int                @id @default(autoincrement())
+  centerId    Int
+  center      Center             @relation(fields: [centerId], references: [id])
+  teamId      Int? // يرجع لعُهدة تيم أو null = للمخزن المركزي
+  team        Team?              @relation(fields: [teamId], references: [id])
+  date        DateTime           @default(now())
+  notes       String?
+  createdById Int?
+  items       CenterReturnItem[]
+  createdAt   DateTime           @default(now())
+}
+
+model CenterReturnItem {
+  id        Int          @id @default(autoincrement())
+  returnId  Int
+  ret       CenterReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product      @relation(fields: [productId], references: [id])
+  qty       Int
+  unitPrice Float        @default(0)
+}
+
+// تحصيل من السنتر (يقلل المديونية)
+// method: CASH | TRANSFER
+model Payment {
+  id          Int      @id @default(autoincrement())
+  centerId    Int
+  center      Center   @relation(fields: [centerId], references: [id])
+  amount      Float
+  method      String
+  reference   String? // رقم عملية التحويل
+  date        DateTime @default(now())
+  notes       String?
+  createdById Int?
+  createdAt   DateTime @default(now())
+}
+
+// بيع المكتبة (نقطة بيع)
+model ShopSale {
+  id          Int            @id @default(autoincrement())
+  date        DateTime       @default(now())
+  method      String // CASH | TRANSFER
+  reference   String?
+  total       Float          @default(0)
+  notes       String?
+  createdById Int?
+  items       ShopSaleItem[]
+  createdAt   DateTime       @default(now())
+}
+
+model ShopSaleItem {
+  id        Int      @id @default(autoincrement())
+  saleId    Int
+  sale      ShopSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id])
+  qty       Int
+  unitPrice Float    @default(0)
+}
